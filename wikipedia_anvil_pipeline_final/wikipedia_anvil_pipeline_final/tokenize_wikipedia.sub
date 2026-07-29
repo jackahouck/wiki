@@ -1,0 +1,46 @@
+#!/bin/bash
+#SBATCH -A cis261275-ai
+#SBATCH -p ai
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=48:00:00
+#SBATCH --job-name=wiki_tokenize
+#SBATCH --output=/anvil/projects/x-cis261275/training/wiki-tokenize-%j.out
+#SBATCH --error=/anvil/projects/x-cis261275/training/wiki-tokenize-%j.err
+
+set -euo pipefail
+
+module purge
+module load modtree/gpu
+module load conda
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate /home/x-jhouck1/.conda/envs/pipeline
+
+export PROJECT=/anvil/projects/x-cis261275
+export REPO_DIR="${REPO_DIR:-$PROJECT/training/wikipedia-pipeline}"
+export COMPARISON_TOKENIZER_PATH="${COMPARISON_TOKENIZER_PATH:-$REPO_DIR/tokenizer_bracket}"
+export HF_HOME="$PROJECT/training/wikipedia/hf_cache"
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
+export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
+export TRANSFORMERS_CACHE="$HF_HOME/transformers"
+export RAYON_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
+export TOKENIZERS_PARALLELISM=true
+export PYTHONUNBUFFERED=1
+
+cd "$REPO_DIR"
+
+echo "Repository: $REPO_DIR"
+echo "Tokenizer: $COMPARISON_TOKENIZER_PATH"
+echo "Python: $(which python)"
+python -c "from transformers import AutoTokenizer; t=AutoTokenizer.from_pretrained('$COMPARISON_TOKENIZER_PATH', local_files_only=True); print('tokenizer length', len(t)); print('added vocab', list(t.get_added_vocab().items())[:20])"
+python -m pip freeze > "$PROJECT/training/wikipedia/python_environment-tokenize.txt"
+
+FORCE_ARG=()
+if [[ "${TOKENIZE_FORCE:-0}" == "1" ]]; then
+  FORCE_ARG+=(--force)
+fi
+
+# CPU-only tokenization. No GPU is requested.
+srun python -u tokenize_wikipedia.py --tokenizer-path "$COMPARISON_TOKENIZER_PATH" "${FORCE_ARG[@]}"
